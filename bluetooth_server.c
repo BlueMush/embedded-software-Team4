@@ -15,6 +15,10 @@
 
 #define LED1 1//BCM_GPIO 18
 
+struct thread_data{  
+    int fd;  
+    char ip[20];  
+};  
 
 void *ThreadMain(void *argument);
 bdaddr_t bdaddr_any = {0, 0, 0, 0, 0, 0};
@@ -165,11 +169,13 @@ sdp_session_t *register_service(uint8_t rfcomm_channel) {
     return session;
 }
 
-
-
+char command[100] ={"killall omxplayer"};
+char buf[80];
 char input[1024] = { 0 };
+int flag =0;
 char *read_server(int client) {
-    
+     signal( SIGPIPE, SIG_IGN );  
+    printf(" client  값:%d\n",client);
     // read data from the client
     int bytes_read;
     bytes_read = read(client, input, sizeof(input));
@@ -180,22 +186,33 @@ char *read_server(int client) {
         int ret = atoi(input);
         
         if(ret == 0){
-            printf("asdasd");
+            printf("불이꺼집니다.\n");
             wiringPiSetup();
-                printf("siba");
             pinMode(LED1,OUTPUT);
             digitalWrite(LED1,0);
+            flag =0;
            
         }
         else if(ret ==1){
-            
+            printf("불이켜집니다.\n");
             wiringPiSetup();
-                printf("gaba");
             pinMode(LED1,OUTPUT);
             digitalWrite(LED1,1);
+            if(flag==0){
+    
+             system("omxplayer coin.wav");
+             system(command);
+             flag=1;
+              
+           }
         }
+        
         return input;
-    } else {
+    } 
+    else if(bytes_read ==0){
+        return 0;
+    }
+    else {
         return NULL;
     }
 }
@@ -218,9 +235,9 @@ int main()
     pthread_t thread_id;  
   
     signal( SIGPIPE, SIG_IGN );  
+      
     
-    
-    int port = 3, result, sock, client, bytes_read, bytes_sent;
+    int port = 10, result, sock, client, bytes_read, bytes_sent;
     struct sockaddr_rc loc_addr = { 0 }, rem_addr = { 0 };
     char buffer[1024] = { 0 };
     socklen_t opt = sizeof(rem_addr);
@@ -237,9 +254,14 @@ int main()
     printf("socket() returned %d\n", sock);
 
     // bind socket to port 3 of the first available
+    
     result = bind(sock, (struct sockaddr *)&loc_addr, sizeof(loc_addr));
+    if(result  !=0){
+        perror("bind");
+        return 0;
+    }
     printf("bind() on channel %d returned %d\n", port, result);
-
+ 
     // put socket into listening mode
     result = listen(sock, 1);
     printf("listen() returned %d\n", result);
@@ -252,6 +274,12 @@ int main()
         // accept one connection
         printf("calling accept()\n");
         client = accept(sock, (struct sockaddr *)&rem_addr, &opt);
+        if(client == -1)
+        {
+            perror("accept");
+                 
+            continue;
+        }
         printf("accept() returned %d\n", client);
     
         ba2str(&rem_addr.rc_bdaddr, buffer);
@@ -260,36 +288,60 @@ int main()
         
         pthread_create( &thread_id, NULL, ThreadMain, (void*)client);   
     }
+    return 0;
     
 }
 
 
+
 void *ThreadMain(void *argument)  
+
 {  
+
     char buf[1024];  
+
   
+
     pthread_detach(pthread_self());  
+
     int client = (int)argument;  
+
  
+
   
+
     while(1)  
+
     {  
+
         char *recv_message = read_server(client);
+
         if ( recv_message == NULL ){
+
             printf("client disconnected\n");
+
             break;
+
         } 
+
         
+
         printf("%s\n", recv_message);
-    
+
         
+
         write_server(client, recv_message);
+
     }  
+
   
+
     printf("disconnected\n" );  
+
     close(client);  
+
   
+
     return 0;     
+
 }  
-
-
