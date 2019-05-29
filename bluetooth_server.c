@@ -11,6 +11,9 @@
 #include <sys/wait.h>
 #include <pthread.h>
 #include <signal.h>
+#include <wiringPi.h>
+
+#define LED1 1//BCM_GPIO 18
 
 
 void *ThreadMain(void *argument);
@@ -166,11 +169,31 @@ sdp_session_t *register_service(uint8_t rfcomm_channel) {
 
 char input[1024] = { 0 };
 char *read_server(int client) {
+    
     // read data from the client
     int bytes_read;
     bytes_read = read(client, input, sizeof(input));
     if (bytes_read > 0) {
+      
+      
         printf("received [%s]\n", input);
+        int ret = atoi(input);
+        
+        if(ret == 0){
+            printf("asdasd");
+            wiringPiSetup();
+                printf("siba");
+            pinMode(LED1,OUTPUT);
+            digitalWrite(LED1,0);
+           
+        }
+        else if(ret ==1){
+            
+            wiringPiSetup();
+                printf("gaba");
+            pinMode(LED1,OUTPUT);
+            digitalWrite(LED1,1);
+        }
         return input;
     } else {
         return NULL;
@@ -258,6 +281,7 @@ void *ThreadMain(void *argument)
         } 
         
         printf("%s\n", recv_message);
+    
         
         write_server(client, recv_message);
     }  
