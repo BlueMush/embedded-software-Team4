@@ -13,7 +13,105 @@
 #include <signal.h>
 #include <wiringPi.h>
 
-#define LED1 1//BCM_GPIO 18
+#define MAX_TIMINGS    85
+#define LED1 18//BCM_GPIO 18   LED
+#define DHT_PIN 3 //BCM_GPIO 23  DHT22
+
+
+static const unsigned short signal_dht = 23; //dht22  signal 로제어
+unsigned short data[5] = {0, 0, 0, 0, 0};
+
+
+short readData()
+{
+	unsigned short val = 0x00;
+	unsigned short signal_length = 0;
+	unsigned short val_counter = 0;
+	unsigned short loop_counter = 0;
+	
+	while (1)
+	{
+		// Count only HIGH signal
+		while (digitalRead(signal_dht) == HIGH)
+		{
+			signal_length++;
+			
+			// When sending data ends, high signal occur infinite.
+			// So we have to end this infinite loop.
+			if (signal_length >= 200)
+			{				
+				return -1;
+			}
+
+			delayMicroseconds(1);
+		}
+
+		// If signal is HIGH
+		if (signal_length > 0)
+		{
+			loop_counter++;	// HIGH signal counting
+
+			// The DHT22 sends a lot of unstable signals.
+			// So extended the counting range.
+			if (signal_length < 10)
+			{
+				// Unstable signal
+				val <<= 1;		// 0 bit. Just shift left
+			}
+
+			else if (signal_length < 30)
+			{
+				// 26~28us means 0 bit
+				val <<= 1;		// 0 bit. Just shift left
+			}
+
+			else if (signal_length < 85)
+			{
+				// 70us means 1 bit	
+				// Shift left and input 0x01 using OR operator
+				val <<= 1;
+				val |= 1;
+			}
+
+			else
+			{
+				// Unstable signal
+				return -1;
+			}
+
+			signal_length = 0;	// Initialize signal length for next signal
+			val_counter++;		// Count for 8 bit data
+		}
+
+		// The first and second signal is DHT22's start signal.
+		// So ignore these data.
+		if (loop_counter < 3)
+		{
+			val = 0x00;
+			val_counter = 0;
+		}
+
+		// If 8 bit data input complete
+		if (val_counter >= 8)
+		{
+			// 8 bit data input to the data array
+			data[(loop_counter / 8) - 1] = val;
+
+			val = 0x00;
+			val_counter = 0;
+		}
+	}
+}
+
+
+
+
+
+
+
+
+
+
 
 struct thread_data{  
     int fd;  
@@ -173,21 +271,24 @@ char command[100] ={"killall omxplayer"};
 char buf[80];
 char input[1024] = { 0 };
 int flag =0;
+
 char *read_server(int client) {
-     signal( SIGPIPE, SIG_IGN );  
-    printf(" client  값:%d\n",client);
+    
+     signal( SIGPIPE, SIG_IGN );
+     if(wiringPiSetupGpio() ==-1){
+	 printf("fail\n");
+	 }  
     // read data from the client
     int bytes_read;
     bytes_read = read(client, input, sizeof(input));
     if (bytes_read > 0) {
       
       
-        printf("received [%s]\n", input);
+        printf("\n read_server !! ->>received %s \n", input);
         int ret = atoi(input);
         
         if(ret == 0){
-            printf("불이꺼집니다.\n");
-            wiringPiSetup();
+            printf("\n 불이꺼집니다.\n");
             pinMode(LED1,OUTPUT);
             digitalWrite(LED1,0);
             flag =0;
@@ -195,20 +296,23 @@ char *read_server(int client) {
         }
         else if(ret ==1){
             printf("불이켜집니다.\n");
-            wiringPiSetup();
             pinMode(LED1,OUTPUT);
             digitalWrite(LED1,1);
             if(flag==0){
-    
              system("omxplayer coin.wav");
              system(command);
              flag=1;
-              
-           }
-        }
-        
+              }//if
+          }//else if
+	
+	 else if(ret ==2){
+	     write_dht22(client);
+	     return input;
+	 }
+     
         return input;
-    } 
+       }
+    
     else if(bytes_read ==0){
         return 0;
     }
@@ -217,15 +321,107 @@ char *read_server(int client) {
     }
 }
 
+
+
 void write_server(int client, char *message) {
     // send data to the client
     char messageArr[1024] = { 0 };
     int bytes_sent;
-    strcpy(messageArr, message);
-
+    //char buf[15] = "1164서울70사6430";
+    
+   
+    //strcpy(messageArr,buf);
+    
+     
     bytes_sent = write(client, messageArr, strlen(messageArr));
     if (bytes_sent > 0) {
         printf("sent [%s] %d\n", messageArr, bytes_sent);
+    }
+}
+
+
+
+void write_dht22(int client) {
+    // send data to the client
+    char messageArr[1024] = { 0 };
+    int bytes_sent;
+    
+    float humidity;
+	float celsius;
+	float fahrenheit;
+	short checksum;
+  
+	// GPIO Initialization
+	if (wiringPiSetupGpio() == -1)
+	{
+		printf("[x_x] GPIO Initialization FAILED.\n");
+		return -1;
+	}
+    
+    
+     //시작!!
+     
+		pinMode(signal_dht, OUTPUT);
+
+		// Send out start signal
+		digitalWrite(signal_dht, LOW);
+		delay(20);					// Stay LOW for 5~30 milliseconds
+		pinMode(signal_dht, INPUT);		// 'INPUT' equals 'HIGH' level. And signal read mode
+
+		readData();		// Read DHT22 signal
+
+		// The sum is maybe over 8 bit like this: '0001 0101 1010'.
+		// Remove the '9 bit' data using AND operator.
+		checksum = (data[0] + data[1] + data[2] + data[3]) & 0xFF;
+		
+		// If Check-sum data is correct (NOT 0x00), display humidity and temperature
+		if (data[4] == checksum && checksum != 0x00)
+		{
+			// * 256 is the same thing '<< 8' (shift).
+			humidity = ((data[0] * 256) + data[1]) / 10.0;
+			celsius = data[3] / 10.0;
+
+			// If 'data[2]' data like 1000 0000, It means minus temperature
+			if (data[2] == 0x80)
+			{
+				celsius *= -1;
+			}
+
+			fahrenheit = ((celsius * 9) / 5) + 32;
+
+			// Display all data
+            char buf1[100];
+            
+			printf("temp: %6.2f *C (%6.2f *F) | hum: %6.2f %\n\n", celsius, fahrenheit, humidity);
+            sprintf(buf1," 온도:%6.2f *C          습도: %6.2f % \n", celsius,humidity);
+            strcpy(messageArr,buf1);
+            
+        }
+
+		else
+		{
+            char buf1[100];
+			printf("다시한번 눌러주세요~!.\n");
+            sprintf(buf1,"다시한번 눌러주세요~!.\n");
+            strcpy(messageArr,buf1);
+            
+		}
+
+		// Initialize data array for next loop
+		for (unsigned char i = 0; i < 5; i++)
+		{
+			data[i] = 0;
+		}
+
+		delay(1000);
+        // DHT22 average sensing period is 2 seconds
+
+    bytes_sent = write(client, messageArr, strlen(messageArr));
+ 
+  wiringPiSetup();
+    if (bytes_sent > 0) {
+        printf(messageArr);
+        printf("\n byte :%d\n",bytes_sent);
     }
 }
 
@@ -237,7 +433,7 @@ int main()
     signal( SIGPIPE, SIG_IGN );  
       
     
-    int port = 10, result, sock, client, bytes_read, bytes_sent;
+    int port = 5, result, sock, client, bytes_read, bytes_sent;
     struct sockaddr_rc loc_addr = { 0 }, rem_addr = { 0 };
     char buffer[1024] = { 0 };
     socklen_t opt = sizeof(rem_addr);
@@ -313,9 +509,11 @@ void *ThreadMain(void *argument)
     while(1)  
 
     {  
-
+        
+        
+      
         char *recv_message = read_server(client);
-
+       
         if ( recv_message == NULL ){
 
             printf("client disconnected\n");
@@ -323,14 +521,11 @@ void *ThreadMain(void *argument)
             break;
 
         } 
-
+         
+   
         
-
-        printf("%s\n", recv_message);
-
-        
-
-        write_server(client, recv_message);
+       // 온습도값 을여기다 가해줘야할듯?
+        printf("\n받은값:%s\n", recv_message);
 
     }  
 
